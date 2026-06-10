@@ -353,20 +353,19 @@ class TextNowAccessibilityService : AccessibilityService() {
 
     // ── Retry Helper ──────────────────────────────────────────────────────────
 
-    private suspend fun tryWithRetry(
-        attempts: Int,
-        delayBetween: Long,
-        block: () -> Boolean
-    ): Boolean {
-        for (attempt in 1..attempts) {
-            if (!isActive) return false
-            val result = block()
-            if (result) return true
-            if (attempt < attempts) {
-                Log.d(TAG, "Attempt $attempt failed, retrying in ${delayBetween}ms")
-                delay(delayBetween)
-            }
+private suspend fun tryWithRetry(
+    attempts: Int,
+    delayBetween: Long,
+    block: () -> Boolean
+): Boolean {
+    for (attempt in 1..attempts) {
+        if (!currentCoroutineContext().isActive) return false
+        val result = block()
+        if (result) return true
+        if (attempt < attempts) {
+            Log.d(TAG, "Attempt $attempt failed, retrying in ${delayBetween}ms")
+            delay(delayBetween)
         }
-        return false
     }
+    return false
 }
