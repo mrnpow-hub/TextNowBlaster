@@ -124,13 +124,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:hint="Type your message here..."
+                    android:hintTextColor="#AAAAAA"
                     android:minLines="4"
                     android:maxLines="6"
                     android:gravity="top"
                     android:inputType="textMultiLine|textCapSentences"
-                    android:background="@android:color/white"
+                    android:background="@android:drawable/edit_text"
                     android:padding="10dp"
-                    android:textSize="14sp" />
+                    android:textSize="14sp"
+                    android:textColor="#222222" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
