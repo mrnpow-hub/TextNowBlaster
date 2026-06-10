@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TextNow Blaster</string>
+    <string name="accessibility_service_label">TextNow Blaster Automation</string>
+    <string name="accessibility_service_description">Required to automate sending messages through TextNow. This service interacts with TextNow\'s UI on your behalf to compose and send messages.</string>
+</resources>
