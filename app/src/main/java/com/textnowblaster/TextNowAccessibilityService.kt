@@ -23,7 +23,6 @@ class TextNowAccessibilityService : AccessibilityService() {
 
         private const val UI_WAIT_MS = 2500L
         private const val SEND_WAIT_MS = 1500L
-        private const val ATTACH_WAIT_MS = 3000L
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -99,14 +98,14 @@ class TextNowAccessibilityService : AccessibilityService() {
     private suspend fun sendMessageTo(number: String, message: String, imageUri: Uri?): Boolean {
         return try {
             if (imageUri != null) {
-                // Use ACTION_SEND to open TextNow with number, message and image pre-filled
-                openTextNowWithImageAndNumber(number, message, imageUri)
-                delay(UI_WAIT_MS + 1000L)
+                // Open TextNow with image via ACTION_SEND, then fill number and message after
+                openTextNowWithImage(imageUri)
+                delay(UI_WAIT_MS)
                 tryWithRetry(attempts = 3, delayBetween = 1000L) {
-                    tapSendOnly()
+                    fillNumberAndMessage(number, message)
                 }
             } else {
-                // No image — use sms: intent to open the correct conversation, then fill and send
+                // No image — use sms: intent to open correct conversation
                 openTextNowNewMessage(number)
                 delay(UI_WAIT_MS)
                 tryWithRetry(attempts = 3, delayBetween = 1000L) {
@@ -155,8 +154,7 @@ class TextNowAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun openTextNowWithImageAndNumber(number: String, message: String, imageUri: Uri) {
-        // Grant TextNow read access to the image URI
+    private fun openTextNowWithImage(imageUri: Uri) {
         for (pkg in TEXTNOW_PACKAGES) {
             try {
                 applicationContext.grantUriPermission(pkg, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -168,25 +166,97 @@ class TextNowAccessibilityService : AccessibilityService() {
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "image/*"
                     putExtra(Intent.EXTRA_STREAM, imageUri)
-                    putExtra("address", number)       // pre-fill recipient number
-                    putExtra("sms_body", message)     // pre-fill message body
-                    putExtra(Intent.EXTRA_TEXT, message)
                     setPackage(pkg)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 applicationContext.startActivity(intent)
-                Log.d(TAG, "Launched $pkg with image + number + message")
+                Log.d(TAG, "Launched $pkg with image")
                 return
             } catch (e: Exception) {
-                Log.d(TAG, "Could not launch $pkg with image intent: ${e.message}")
+                Log.d(TAG, "Could not launch $pkg with image: ${e.message}")
             }
         }
     }
 
     // ── Send Logic ────────────────────────────────────────────────────────────
 
+    private fun fillNumberAndMessage(number: String, message: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+
+        // Step 1: fill the number field
+        val numberField = findNumberInputField(root)
+        if (numberField != null) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, number)
+            }
+            val numberSet = numberField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            Log.d(TAG, "Number field set: $numberSet")
+            Thread.sleep(800L)
+
+            // Tap the number field to confirm/select the suggestion that appears
+            numberField.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Thread.sleep(1000L)
+        } else {
+            Log.d(TAG, "Number field not found")
+            root.recycle()
+            return false
+        }
+
+        root.recycle()
+
+        // Step 2: fill the message field
+        if (message.isNotEmpty()) {
+            val refreshedRoot = rootInActiveWindow ?: return false
+            val messageField = findMessageInputField(refreshedRoot)
+            if (messageField == null) {
+                Log.d(TAG, "Message field not found")
+                refreshedRoot.recycle()
+                return false
+            }
+
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
+            }
+            val textSet = messageField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            refreshedRoot.recycle()
+            if (!textSet) {
+                Log.d(TAG, "Failed to set message text")
+                return false
+            }
+            Thread.sleep(SEND_WAIT_MS)
+        }
+
+        // Step 3: tap send
+        val finalRoot = rootInActiveWindow ?: return false
+        val sendButton = findSendButton(finalRoot)
+        finalRoot.recycle()
+
+        if (sendButton == null) {
+            Log.d(TAG, "Send button not found")
+            return false
+        }
+
+        val clicked = sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        Log.d(TAG, "Send clicked: $clicked")
+        return clicked
+    }
+
     private fun fillMessageAndSend(message: String): Boolean {
         val root = rootInActiveWindow ?: return false
+
+        // Check number field
+        val numberField = findNumberInputField(root)
+        if (numberField != null) {
+            val currentText = numberField.text?.toString() ?: ""
+            Log.d(TAG, "Number field text: '$currentText'")
+            if (currentText.isBlank()) {
+                Log.d(TAG, "Number field is empty — retrying")
+                root.recycle()
+                return false
+            }
+        } else {
+            Log.d(TAG, "Number field not found — assuming already in conversation")
+        }
 
         // Type the message
         if (message.isNotEmpty()) {
@@ -226,22 +296,36 @@ class TextNowAccessibilityService : AccessibilityService() {
         return clicked
     }
 
-    private fun tapSendOnly(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val sendButton = findSendButton(root)
-        root.recycle()
+    // ── Node Finders ──────────────────────────────────────────────────────────
 
-        if (sendButton == null) {
-            Log.d(TAG, "Send button not found")
-            return false
+    private fun findNumberInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val resourceIds = listOf(
+            "com.enflick.android.tngo:id/recipient_edit_text",
+            "com.enflick.android.tngo:id/recipientEditText",
+            "com.enflick.android.tngo:id/to_field",
+            "com.enflick.android.tngo:id/toField",
+            "com.enflick.android.tngo:id/contacts_edit_text",
+            "com.enflick.android.TextNow:id/recipient_edit_text",
+            "com.enflick.android.TextNow:id/recipientEditText",
+            "com.enflick.android.TextNow:id/to_field",
+            "com.enflick.android.TextNow:id/toField",
+            "com.enflick.android.TextNow:id/contacts_edit_text"
+        )
+        for (id in resourceIds) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            if (nodes.isNotEmpty()) return nodes[0]
         }
 
-        val clicked = sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        Log.d(TAG, "Send clicked: $clicked")
-        return clicked
-    }
+        val hintTexts = listOf("to", "recipient", "enter name", "enter number", "send to")
+        val editTexts = findAllEditTexts(root)
+        for (node in editTexts) {
+            val hint = node.hintText?.toString()?.lowercase() ?: ""
+            val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+            if (hintTexts.any { hint.contains(it) || desc.contains(it) }) return node
+        }
 
-    // ── Node Finders ──────────────────────────────────────────────────────────
+        return editTexts.firstOrNull()
+    }
 
     private fun findMessageInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val resourceIds = listOf(
