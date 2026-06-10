@@ -15,13 +15,11 @@ class TextNowAccessibilityService : AccessibilityService() {
         var instance: TextNowAccessibilityService? = null
         private const val TAG = "TNBlaster"
 
-        // TextNow package — covers both free and premium variants
         private val TEXTNOW_PACKAGES = setOf(
             "com.enflick.android.tngo",
             "com.enflick.android.TextNow"
         )
 
-        // How long to wait for TextNow UI to settle after an action (ms)
         private const val UI_WAIT_MS = 2000L
         private const val SEND_WAIT_MS = 1500L
     }
@@ -30,15 +28,11 @@ class TextNowAccessibilityService : AccessibilityService() {
     private var sendingJob: Job? = null
     private var isCurrentlySending = false
 
-    // Callbacks set by MainActivity
     private var progressCallback: ((Int, Int) -> Unit)? = null
     private var completeCallback: ((Int, Int) -> Unit)? = null
 
-    // State tracking for accessibility event handling
     private var waitingForWindow = false
     private var windowResumeCallback: (() -> Unit)? = null
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onServiceConnected() {
         instance = this
@@ -75,8 +69,6 @@ class TextNowAccessibilityService : AccessibilityService() {
             }
         }
     }
-
-    // ── Public API ────────────────────────────────────────────────────────────
 
     fun isSending() = isCurrentlySending
 
@@ -115,7 +107,6 @@ class TextNowAccessibilityService : AccessibilityService() {
 
                 Log.d(TAG, "Result for $number: ${if (success) "OK" else "FAILED"}")
 
-                // Delay before next recipient (skip after last)
                 if (isActive && index < numbers.size - 1) {
                     delay(delayMs)
                 }
@@ -127,22 +118,18 @@ class TextNowAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── Core Send Logic ───────────────────────────────────────────────────────
-
     private suspend fun sendMessageTo(number: String, message: String): Boolean {
         return try {
-            // Step 1: Open TextNow new message screen directly via deep link
             openTextNowNewMessage(number)
             delay(UI_WAIT_MS)
 
-            // Step 2: Find the message input field and type the message
             val messageSent = tryWithRetry(attempts = 3, delayBetween = 1000L) {
                 fillAndSendMessage(message)
             }
 
             messageSent
         } catch (e: CancellationException) {
-            throw e  // always re-throw cancellation
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error sending to $number: ${e.message}")
             false
@@ -150,15 +137,11 @@ class TextNowAccessibilityService : AccessibilityService() {
     }
 
     private fun openTextNowNewMessage(number: String) {
-        // Try intent with phone number pre-filled
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            // TextNow responds to sms: URI scheme
             data = android.net.Uri.parse("sms:$number")
-            // Explicitly target TextNow packages
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
 
-        // Try primary TextNow package first, fall back to secondary
         var launched = false
         for (pkg in TEXTNOW_PACKAGES) {
             try {
@@ -172,7 +155,6 @@ class TextNowAccessibilityService : AccessibilityService() {
         }
 
         if (!launched) {
-            // Fallback: open TextNow home screen
             for (pkg in TEXTNOW_PACKAGES) {
                 try {
                     val launchIntent = applicationContext.packageManager.getLaunchIntentForPackage(pkg)
@@ -194,10 +176,6 @@ class TextNowAccessibilityService : AccessibilityService() {
             return false
         }
 
-        // Strategy 1: find by resource ID (most reliable, version-dependent)
-        // Strategy 2: find by hint text / content description
-        // Strategy 3: find any EditText that looks like a compose field
-
         val messageField = findMessageInputField(root)
         if (messageField == null) {
             Log.d(TAG, "Message input field not found")
@@ -205,7 +183,6 @@ class TextNowAccessibilityService : AccessibilityService() {
             return false
         }
 
-        // Set the text
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
         }
@@ -217,17 +194,13 @@ class TextNowAccessibilityService : AccessibilityService() {
         }
 
         Log.d(TAG, "Message text set successfully")
-
-        // Small wait for UI to process the text
         Thread.sleep(SEND_WAIT_MS)
 
-        // Refresh root after text change
         val refreshedRoot = rootInActiveWindow ?: run {
             root.recycle()
             return false
         }
 
-        // Find and tap the send button
         val sendButton = findSendButton(refreshedRoot)
         if (sendButton == null) {
             Log.d(TAG, "Send button not found")
@@ -244,10 +217,7 @@ class TextNowAccessibilityService : AccessibilityService() {
         return clicked
     }
 
-    // ── Node Finders ──────────────────────────────────────────────────────────
-
     private fun findMessageInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // Common resource IDs used by TextNow across versions
         val resourceIds = listOf(
             "com.enflick.android.tngo:id/message_edit_text",
             "com.enflick.android.tngo:id/compose_message",
@@ -265,12 +235,10 @@ class TextNowAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Fallback: find by hint text
         val hintTexts = listOf("message", "type a message", "sms", "text message", "compose")
         val editTexts = findAllEditTexts(root)
         for (node in editTexts) {
             val hint = node.hintText?.toString()?.lowercase() ?: ""
-            val text = node.text?.toString()?.lowercase() ?: ""
             val desc = node.contentDescription?.toString()?.lowercase() ?: ""
             if (hintTexts.any { hint.contains(it) || desc.contains(it) }) {
                 Log.d(TAG, "Found message field by hint/desc: hint='$hint' desc='$desc'")
@@ -278,14 +246,12 @@ class TextNowAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Last resort: return the last/largest EditText (usually the compose box)
         return editTexts.lastOrNull()?.also {
             Log.d(TAG, "Using last EditText as fallback message field")
         }
     }
 
     private fun findSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // Common resource IDs for send button
         val resourceIds = listOf(
             "com.enflick.android.tngo:id/send_button",
             "com.enflick.android.tngo:id/sendButton",
@@ -303,7 +269,6 @@ class TextNowAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Fallback: find by text or content description
         val sendLabels = listOf("send", "send message")
         for (label in sendLabels) {
             val byText = root.findAccessibilityNodeInfosByText(label)
@@ -314,7 +279,6 @@ class TextNowAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Last resort: find any clickable ImageButton near the bottom of screen
         return findClickableImageButton(root)?.also {
             Log.d(TAG, "Using clickable ImageButton as send button fallback")
         }
@@ -351,21 +315,20 @@ class TextNowAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── Retry Helper ──────────────────────────────────────────────────────────
-
-private suspend fun tryWithRetry(
-    attempts: Int,
-    delayBetween: Long,
-    block: () -> Boolean
-): Boolean {
-    for (attempt in 1..attempts) {
-        if (!currentCoroutineContext().isActive) return false
-        val result = block()
-        if (result) return true
-        if (attempt < attempts) {
-            Log.d(TAG, "Attempt $attempt failed, retrying in ${delayBetween}ms")
-            delay(delayBetween)
+    private suspend fun tryWithRetry(
+        attempts: Int,
+        delayBetween: Long,
+        block: () -> Boolean
+    ): Boolean {
+        for (attempt in 1..attempts) {
+            if (!currentCoroutineContext().isActive) return false
+            val result = block()
+            if (result) return true
+            if (attempt < attempts) {
+                Log.d(TAG, "Attempt $attempt failed, retrying in ${delayBetween}ms")
+                delay(delayBetween)
+            }
         }
+        return false
     }
-    return false
 }
