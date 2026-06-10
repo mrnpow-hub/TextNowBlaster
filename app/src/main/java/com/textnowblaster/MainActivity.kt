@@ -28,6 +28,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.etMessage.setHintTextColor(0xFFAAAAAA.toInt())
 
         setupDelaySeekBar()
         setupButtons()
