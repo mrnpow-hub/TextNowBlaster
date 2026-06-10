@@ -15,9 +15,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val phoneNumbers = mutableListOf<String>()
+    private var selectedImageUri: Uri? = null
 
     companion object {
         const val REQUEST_PICK_FILE = 1001
+        const val REQUEST_PICK_IMAGE = 1002
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,20 +35,15 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateAccessibilityStatus()
-        // Sync button states with service
         val service = TextNowAccessibilityService.instance
         if (service != null && service.isSending()) {
             setRunningState(true)
-            observeServiceProgress()
         } else {
             setRunningState(false)
         }
     }
 
-    // ── UI Setup ──────────────────────────────────────────────────────────────
-
     private fun setupDelaySeekBar() {
-        // SeekBar 0-55 maps to 5-60 seconds
         binding.tvDelayValue.text = "${getDelaySeconds()} sec"
         binding.seekDelay.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -59,6 +56,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupButtons() {
         binding.btnLoadFile.setOnClickListener { openFilePicker() }
+        binding.btnPickImage.setOnClickListener { openImagePicker() }
+        binding.btnClearImage.setOnClickListener { clearImage() }
         binding.btnStart.setOnClickListener { onStartClicked() }
         binding.btnStop.setOnClickListener { onStopClicked() }
         binding.btnAccessibility.setOnClickListener {
@@ -76,10 +75,31 @@ class MainActivity : AppCompatActivity() {
         startActivityForResult(Intent.createChooser(intent, "Select phone numbers file"), REQUEST_PICK_FILE)
     }
 
+    private fun openImagePicker() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        startActivityForResult(Intent.createChooser(intent, "Select image"), REQUEST_PICK_IMAGE)
+    }
+
+    private fun clearImage() {
+        selectedImageUri = null
+        binding.tvImageStatus.text = "No image selected"
+        binding.tvImageStatus.setTextColor(0xFF888888.toInt())
+        binding.ivPreview.visibility = android.view.View.GONE
+        binding.ivPreview.setImageDrawable(null)
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_PICK_FILE && resultCode == Activity.RESULT_OK) {
-            data?.data?.let { uri -> loadNumbersFromUri(uri) }
+        when {
+            requestCode == REQUEST_PICK_FILE && resultCode == Activity.RESULT_OK -> {
+                data?.data?.let { uri -> loadNumbersFromUri(uri) }
+            }
+            requestCode == REQUEST_PICK_IMAGE && resultCode == Activity.RESULT_OK -> {
+                data?.data?.let { uri -> loadImage(uri) }
+            }
         }
     }
 
@@ -91,8 +111,7 @@ class MainActivity : AppCompatActivity() {
 
             phoneNumbers.clear()
             for (line in lines) {
-                val cleaned = line.trim()
-                    .replace(Regex("[\\s\\-().+]"), "")  // strip formatting
+                val cleaned = line.trim().replace(Regex("[\\s\\-().+]"), "")
                 if (cleaned.isNotEmpty() && cleaned.all { it.isDigit() } && cleaned.length >= 7) {
                     phoneNumbers.add(cleaned)
                 }
@@ -101,7 +120,6 @@ class MainActivity : AppCompatActivity() {
             val skipped = lines.count { it.isNotBlank() } - phoneNumbers.size
             binding.tvNumberCount.text = "✅  ${phoneNumbers.size} valid numbers loaded" +
                     if (skipped > 0) "  ($skipped skipped)" else ""
-
             binding.tvNumbersList.text = phoneNumbers.take(50).joinToString("\n") +
                     if (phoneNumbers.size > 50) "\n... and ${phoneNumbers.size - 50} more" else ""
 
@@ -113,6 +131,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun loadImage(uri: Uri) {
+        try {
+            // Keep a persistent permission on the URI so the service can access it later
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: Exception) {
+            // Not all URIs support persistable permissions — that's fine, we store the URI anyway
+        }
+
+        selectedImageUri = uri
+
+        // Show preview
+        binding.ivPreview.visibility = android.view.View.VISIBLE
+        binding.ivPreview.setImageURI(uri)
+
+        // Show filename if available
+        val fileName = getFileName(uri) ?: uri.lastPathSegment ?: "image"
+        binding.tvImageStatus.text = "✅  $fileName"
+        binding.tvImageStatus.setTextColor(0xFF2E7D32.toInt())
+    }
+
+    private fun getFileName(uri: Uri): String? {
+        return try {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val idx = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) it.getString(idx) else null
+                } else null
+            }
+        } catch (e: Exception) { null }
+    }
+
     // ── Start / Stop ──────────────────────────────────────────────────────────
 
     private fun onStartClicked() {
@@ -122,15 +172,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         val message = binding.etMessage.text.toString().trim()
-        if (message.isEmpty()) {
-            Toast.makeText(this, "Please enter a message to send.", Toast.LENGTH_SHORT).show()
+        if (message.isEmpty() && selectedImageUri == null) {
+            Toast.makeText(this, "Please enter a message or pick an image.", Toast.LENGTH_SHORT).show()
             return
         }
 
         if (!isAccessibilityEnabled()) {
             AlertDialog.Builder(this)
                 .setTitle("Accessibility Service Required")
-                .setMessage("TextNow Blaster needs the Accessibility Service enabled to automate TextNow.\n\nTap 'Open Settings', find 'TextNow Blaster Automation', and enable it.")
+                .setMessage("TextNow Blaster needs the Accessibility Service enabled.\n\nTap 'Open Settings', find 'TextNow Blaster Automation', and enable it.")
                 .setPositiveButton("Open Settings") { _, _ ->
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
@@ -139,9 +189,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val imageNote = if (selectedImageUri != null) "\n+ image attached" else "\n(no image)"
         AlertDialog.Builder(this)
             .setTitle("Confirm Send")
-            .setMessage("Send the following message to ${phoneNumbers.size} numbers?\n\n\"$message\"\n\nDelay: ${getDelaySeconds()} seconds between each.")
+            .setMessage("Send to ${phoneNumbers.size} numbers?\n\n\"$message\"$imageNote\n\nDelay: ${getDelaySeconds()} sec between each.")
             .setPositiveButton("Send") { _, _ -> startSending(message) }
             .setNegativeButton("Cancel", null)
             .show()
@@ -162,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         service.startSending(
             numbers = ArrayList(phoneNumbers),
             message = message,
+            imageUri = selectedImageUri,
             delayMs = getDelaySeconds() * 1000L,
             onProgress = { current, total ->
                 runOnUiThread {
@@ -186,27 +238,6 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Sending stopped.", Toast.LENGTH_SHORT).show()
     }
 
-    private fun observeServiceProgress() {
-        val service = TextNowAccessibilityService.instance ?: return
-        service.startSending(
-            numbers = ArrayList(phoneNumbers),
-            message = "",
-            delayMs = 0,
-            onProgress = { current, total ->
-                runOnUiThread {
-                    binding.tvProgress.text = "Sending $current / $total"
-                    binding.progressBar.progress = ((current.toFloat() / total) * 100).toInt()
-                }
-            },
-            onComplete = { sent, failed ->
-                runOnUiThread {
-                    setRunningState(false)
-                    binding.tvProgress.text = "Done! ✅  Sent: $sent  ❌  Failed: $failed"
-                }
-            }
-        )
-    }
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun getDelaySeconds(): Int = binding.seekDelay.progress + 5
@@ -215,6 +246,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnStart.isEnabled = !running
         binding.btnStop.isEnabled = running
         binding.btnLoadFile.isEnabled = !running
+        binding.btnPickImage.isEnabled = !running
+        binding.btnClearImage.isEnabled = !running
         binding.seekDelay.isEnabled = !running
         if (running) binding.layoutProgress.visibility = android.view.View.VISIBLE
     }
