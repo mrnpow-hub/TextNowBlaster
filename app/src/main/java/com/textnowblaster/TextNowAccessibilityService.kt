@@ -2,7 +2,11 @@ package com.textnowblaster
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -20,19 +24,14 @@ class TextNowAccessibilityService : AccessibilityService() {
             "com.enflick.android.TextNow"
         )
 
-        private const val UI_WAIT_MS = 2000L
+        private const val UI_WAIT_MS = 2500L
         private const val SEND_WAIT_MS = 1500L
+        private const val ATTACH_WAIT_MS = 3000L
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var sendingJob: Job? = null
     private var isCurrentlySending = false
-
-    private var progressCallback: ((Int, Int) -> Unit)? = null
-    private var completeCallback: ((Int, Int) -> Unit)? = null
-
-    private var waitingForWindow = false
-    private var windowResumeCallback: (() -> Unit)? = null
 
     override fun onServiceConnected() {
         instance = this
@@ -54,41 +53,26 @@ class TextNowAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    override fun onInterrupt() {
-        Log.d(TAG, "Accessibility service interrupted")
-    }
+    override fun onInterrupt() {}
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (waitingForWindow && event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val packageName = event.packageName?.toString() ?: return
-            if (packageName in TEXTNOW_PACKAGES) {
-                waitingForWindow = false
-                val cb = windowResumeCallback
-                windowResumeCallback = null
-                cb?.invoke()
-            }
-        }
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     fun isSending() = isCurrentlySending
 
     fun stopSending() {
         sendingJob?.cancel()
         isCurrentlySending = false
-        Log.d(TAG, "Sending stopped by user")
     }
 
     fun startSending(
         numbers: ArrayList<String>,
         message: String,
+        imageUri: Uri?,
         delayMs: Long,
         onProgress: (Int, Int) -> Unit,
         onComplete: (Int, Int) -> Unit
     ) {
         if (isCurrentlySending) return
-
-        progressCallback = onProgress
-        completeCallback = onComplete
         isCurrentlySending = true
 
         sendingJob = serviceScope.launch {
@@ -99,13 +83,11 @@ class TextNowAccessibilityService : AccessibilityService() {
             for ((index, number) in numbers.withIndex()) {
                 if (!isActive) break
 
-                Log.d(TAG, "Processing $number (${index + 1}/$total)")
                 onProgress(index + 1, total)
+                Log.d(TAG, "Sending to $number (${index + 1}/$total)")
 
-                val success = sendMessageTo(number, message)
+                val success = sendMessageTo(number, message, imageUri)
                 if (success) sent++ else failed++
-
-                Log.d(TAG, "Result for $number: ${if (success) "OK" else "FAILED"}")
 
                 if (isActive && index < numbers.size - 1) {
                     delay(delayMs)
@@ -114,20 +96,17 @@ class TextNowAccessibilityService : AccessibilityService() {
 
             isCurrentlySending = false
             onComplete(sent, failed)
-            Log.d(TAG, "All done. Sent: $sent, Failed: $failed")
         }
     }
 
-    private suspend fun sendMessageTo(number: String, message: String): Boolean {
+    private suspend fun sendMessageTo(number: String, message: String, imageUri: Uri?): Boolean {
         return try {
             openTextNowNewMessage(number)
             delay(UI_WAIT_MS)
 
-            val messageSent = tryWithRetry(attempts = 3, delayBetween = 1000L) {
-                fillAndSendMessage(message)
+            tryWithRetry(attempts = 3, delayBetween = 1000L) {
+                fillMessageAndSend(message, imageUri)
             }
-
-            messageSent
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -138,7 +117,7 @@ class TextNowAccessibilityService : AccessibilityService() {
 
     private fun openTextNowNewMessage(number: String) {
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            data = android.net.Uri.parse("sms:$number")
+            data = Uri.parse("sms:$number")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
 
@@ -150,7 +129,7 @@ class TextNowAccessibilityService : AccessibilityService() {
                 launched = true
                 break
             } catch (e: Exception) {
-                Log.d(TAG, "Package $pkg not available: ${e.message}")
+                Log.d(TAG, "Package $pkg not available")
             }
         }
 
@@ -163,58 +142,168 @@ class TextNowAccessibilityService : AccessibilityService() {
                         applicationContext.startActivity(launchIntent)
                         break
                     }
-                } catch (e: Exception) {
-                    Log.d(TAG, "Launch fallback failed for $pkg: ${e.message}")
-                }
+                } catch (e: Exception) { }
             }
         }
     }
 
-    private fun fillAndSendMessage(message: String): Boolean {
-        val root = rootInActiveWindow ?: run {
-            Log.d(TAG, "No active window root")
-            return false
+    private fun fillMessageAndSend(message: String, imageUri: Uri?): Boolean {
+        // Step 1: attach image if provided
+        if (imageUri != null) {
+            if (!attachImage(imageUri)) {
+                Log.d(TAG, "Image attach failed, continuing without image")
+            }
+            Thread.sleep(ATTACH_WAIT_MS)
         }
 
-        val messageField = findMessageInputField(root)
-        if (messageField == null) {
-            Log.d(TAG, "Message input field not found")
+        // Step 2: type message text (if any)
+        if (message.isNotEmpty()) {
+            val root = rootInActiveWindow ?: return false
+            val messageField = findMessageInputField(root)
             root.recycle()
-            return false
+
+            if (messageField == null) {
+                Log.d(TAG, "Message field not found")
+                return false
+            }
+
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
+            }
+            val textSet = messageField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (!textSet) {
+                Log.d(TAG, "Failed to set message text")
+                return false
+            }
+            Thread.sleep(SEND_WAIT_MS)
         }
 
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
-        }
-        val textSet = messageField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (!textSet) {
-            Log.d(TAG, "Failed to set text in message field")
-            root.recycle()
-            return false
-        }
-
-        Log.d(TAG, "Message text set successfully")
-        Thread.sleep(SEND_WAIT_MS)
-
-        val refreshedRoot = rootInActiveWindow ?: run {
-            root.recycle()
-            return false
-        }
-
+        // Step 3: tap send
+        val refreshedRoot = rootInActiveWindow ?: return false
         val sendButton = findSendButton(refreshedRoot)
+        refreshedRoot.recycle()
+
         if (sendButton == null) {
             Log.d(TAG, "Send button not found")
-            root.recycle()
-            refreshedRoot.recycle()
             return false
         }
 
         val clicked = sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        Log.d(TAG, "Send button click: $clicked")
+        Log.d(TAG, "Send clicked: $clicked")
+        return clicked
+    }
+
+    private fun attachImage(imageUri: Uri): Boolean {
+        val root = rootInActiveWindow ?: return false
+
+        // Find the attach / paperclip button
+        val attachButton = findAttachButton(root)
+        root.recycle()
+
+        if (attachButton == null) {
+            Log.d(TAG, "Attach button not found")
+            return false
+        }
+
+        attachButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        Thread.sleep(ATTACH_WAIT_MS)
+
+        // After tapping attach, TextNow shows a picker or media strip.
+        // Strategy: try to share the image directly into TextNow via clipboard+intent,
+        // then fall back to tapping Gallery in the picker.
+        return tryDirectImageShare(imageUri) || tapGalleryInPicker()
+    }
+
+    private fun tryDirectImageShare(imageUri: Uri): Boolean {
+        return try {
+            // Grant TextNow read permission on the URI
+            for (pkg in TEXTNOW_PACKAGES) {
+                try {
+                    applicationContext.grantUriPermission(pkg, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) { }
+            }
+
+            // Use share intent targeting TextNow — this opens TextNow's compose with the image pre-attached
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_STREAM, imageUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            for (pkg in TEXTNOW_PACKAGES) {
+                try {
+                    shareIntent.setPackage(pkg)
+                    applicationContext.startActivity(shareIntent)
+                    return true
+                } catch (e: Exception) { }
+            }
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Direct image share failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun tapGalleryInPicker(): Boolean {
+        Thread.sleep(1500L)
+        val root = rootInActiveWindow ?: return false
+
+        // Look for "Gallery", "Photos", "Image" options in the picker sheet
+        val labels = listOf("gallery", "photos", "image", "photo library", "files")
+        for (label in labels) {
+            val nodes = root.findAccessibilityNodeInfosByText(label)
+            val node = nodes.firstOrNull { it.isClickable }
+                ?: nodes.firstOrNull()?.let { findClickableParent(it) }
+            if (node != null) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                root.recycle()
+                Log.d(TAG, "Tapped picker option: $label")
+                return true
+            }
+        }
 
         root.recycle()
-        refreshedRoot.recycle()
-        return clicked
+        Log.d(TAG, "No gallery option found in picker")
+        return false
+    }
+
+    // ── Node Finders ──────────────────────────────────────────────────────────
+
+    private fun findAttachButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val resourceIds = listOf(
+            "com.enflick.android.tngo:id/attach_button",
+            "com.enflick.android.tngo:id/attachButton",
+            "com.enflick.android.tngo:id/btn_attach",
+            "com.enflick.android.tngo:id/media_button",
+            "com.enflick.android.TextNow:id/attach_button",
+            "com.enflick.android.TextNow:id/attachButton",
+            "com.enflick.android.TextNow:id/btn_attach",
+            "com.enflick.android.TextNow:id/media_button"
+        )
+        for (id in resourceIds) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            if (nodes.isNotEmpty()) return nodes[0]
+        }
+
+        val labels = listOf("attach", "attachment", "add attachment", "media", "paperclip", "image")
+        for (label in labels) {
+            val nodes = root.findAccessibilityNodeInfosByText(label)
+            val node = nodes.firstOrNull { it.isClickable }
+            if (node != null) return node
+            // Also check content descriptions
+        }
+
+        // Scan all nodes for content description containing attach-related words
+        var found: AccessibilityNodeInfo? = null
+        traverseNodes(root) { node ->
+            if (found == null) {
+                val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+                if ((desc.contains("attach") || desc.contains("media") || desc.contains("image") || desc.contains("photo")) && node.isClickable) {
+                    found = node
+                }
+            }
+        }
+        return found
     }
 
     private fun findMessageInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -226,13 +315,9 @@ class TextNowAccessibilityService : AccessibilityService() {
             "com.enflick.android.TextNow:id/compose_message",
             "com.enflick.android.TextNow:id/messageEditText"
         )
-
         for (id in resourceIds) {
             val nodes = root.findAccessibilityNodeInfosByViewId(id)
-            if (nodes.isNotEmpty()) {
-                Log.d(TAG, "Found message field by ID: $id")
-                return nodes[0]
-            }
+            if (nodes.isNotEmpty()) return nodes[0]
         }
 
         val hintTexts = listOf("message", "type a message", "sms", "text message", "compose")
@@ -240,15 +325,10 @@ class TextNowAccessibilityService : AccessibilityService() {
         for (node in editTexts) {
             val hint = node.hintText?.toString()?.lowercase() ?: ""
             val desc = node.contentDescription?.toString()?.lowercase() ?: ""
-            if (hintTexts.any { hint.contains(it) || desc.contains(it) }) {
-                Log.d(TAG, "Found message field by hint/desc: hint='$hint' desc='$desc'")
-                return node
-            }
+            if (hintTexts.any { hint.contains(it) || desc.contains(it) }) return node
         }
 
-        return editTexts.lastOrNull()?.also {
-            Log.d(TAG, "Using last EditText as fallback message field")
-        }
+        return editTexts.lastOrNull()
     }
 
     private fun findSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -260,36 +340,25 @@ class TextNowAccessibilityService : AccessibilityService() {
             "com.enflick.android.TextNow:id/sendButton",
             "com.enflick.android.TextNow:id/btn_send"
         )
-
         for (id in resourceIds) {
             val nodes = root.findAccessibilityNodeInfosByViewId(id)
-            if (nodes.isNotEmpty()) {
-                Log.d(TAG, "Found send button by ID: $id")
-                return nodes[0]
-            }
+            if (nodes.isNotEmpty()) return nodes[0]
         }
 
         val sendLabels = listOf("send", "send message")
         for (label in sendLabels) {
             val byText = root.findAccessibilityNodeInfosByText(label)
             val clickable = byText.firstOrNull { it.isClickable }
-            if (clickable != null) {
-                Log.d(TAG, "Found send button by text: $label")
-                return clickable
-            }
+            if (clickable != null) return clickable
         }
 
-        return findClickableImageButton(root)?.also {
-            Log.d(TAG, "Using clickable ImageButton as send button fallback")
-        }
+        return findClickableImageButton(root)
     }
 
     private fun findAllEditTexts(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
         val result = mutableListOf<AccessibilityNodeInfo>()
         traverseNodes(root) { node ->
-            if (node.className?.contains("EditText") == true && node.isEditable) {
-                result.add(node)
-            }
+            if (node.className?.contains("EditText") == true && node.isEditable) result.add(node)
         }
         return result
     }
@@ -297,37 +366,34 @@ class TextNowAccessibilityService : AccessibilityService() {
     private fun findClickableImageButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var found: AccessibilityNodeInfo? = null
         traverseNodes(root) { node ->
-            if (found == null &&
-                node.className?.contains("ImageButton") == true &&
-                node.isClickable) {
+            if (found == null && node.className?.contains("ImageButton") == true && node.isClickable) {
                 found = node
             }
         }
         return found
     }
 
+    private fun findClickableParent(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var current = node.parent
+        repeat(5) {
+            if (current?.isClickable == true) return current
+            current = current?.parent
+        }
+        return null
+    }
+
     private fun traverseNodes(node: AccessibilityNodeInfo, action: (AccessibilityNodeInfo) -> Unit) {
         action(node)
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { child ->
-                traverseNodes(child, action)
-            }
+            node.getChild(i)?.let { traverseNodes(it, action) }
         }
     }
 
-    private suspend fun tryWithRetry(
-        attempts: Int,
-        delayBetween: Long,
-        block: () -> Boolean
-    ): Boolean {
+    private suspend fun tryWithRetry(attempts: Int, delayBetween: Long, block: () -> Boolean): Boolean {
         for (attempt in 1..attempts) {
             if (!currentCoroutineContext().isActive) return false
-            val result = block()
-            if (result) return true
-            if (attempt < attempts) {
-                Log.d(TAG, "Attempt $attempt failed, retrying in ${delayBetween}ms")
-                delay(delayBetween)
-            }
+            if (block()) return true
+            if (attempt < attempts) delay(delayBetween)
         }
         return false
     }
