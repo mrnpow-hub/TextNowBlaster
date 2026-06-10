@@ -2,9 +2,6 @@ package com.textnowblaster
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -148,22 +145,14 @@ class TextNowAccessibilityService : AccessibilityService() {
     }
 
     private fun fillMessageAndSend(message: String, imageUri: Uri?): Boolean {
-        // Step 1: attach image if provided
-        if (imageUri != null) {
-            if (!attachImage(imageUri)) {
-                Log.d(TAG, "Image attach failed, continuing without image")
-            }
-            Thread.sleep(ATTACH_WAIT_MS)
-        }
+        val root = rootInActiveWindow ?: return false
 
-        // Step 2: type message text (if any)
+        // Step 1: type message text first (while number is still in place)
         if (message.isNotEmpty()) {
-            val root = rootInActiveWindow ?: return false
             val messageField = findMessageInputField(root)
-            root.recycle()
-
             if (messageField == null) {
                 Log.d(TAG, "Message field not found")
+                root.recycle()
                 return false
             }
 
@@ -173,9 +162,20 @@ class TextNowAccessibilityService : AccessibilityService() {
             val textSet = messageField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             if (!textSet) {
                 Log.d(TAG, "Failed to set message text")
+                root.recycle()
                 return false
             }
             Thread.sleep(SEND_WAIT_MS)
+        }
+
+        root.recycle()
+
+        // Step 2: attach image if provided (after message is typed)
+        if (imageUri != null) {
+            if (!attachImage(imageUri)) {
+                Log.d(TAG, "Image attach failed, continuing without image")
+            }
+            Thread.sleep(ATTACH_WAIT_MS)
         }
 
         // Step 3: tap send
@@ -194,9 +194,14 @@ class TextNowAccessibilityService : AccessibilityService() {
     }
 
     private fun attachImage(imageUri: Uri): Boolean {
-        val root = rootInActiveWindow ?: return false
+        // Grant TextNow read permission on the URI
+        for (pkg in TEXTNOW_PACKAGES) {
+            try {
+                applicationContext.grantUriPermission(pkg, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) { }
+        }
 
-        // Find the attach / paperclip button
+        val root = rootInActiveWindow ?: return false
         val attachButton = findAttachButton(root)
         root.recycle()
 
@@ -208,47 +213,14 @@ class TextNowAccessibilityService : AccessibilityService() {
         attachButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         Thread.sleep(ATTACH_WAIT_MS)
 
-        // After tapping attach, TextNow shows a picker or media strip.
-        // Strategy: try to share the image directly into TextNow via clipboard+intent,
-        // then fall back to tapping Gallery in the picker.
-        return tryDirectImageShare(imageUri) || tapGalleryInPicker()
-    }
-
-    private fun tryDirectImageShare(imageUri: Uri): Boolean {
-        return try {
-            // Grant TextNow read permission on the URI
-            for (pkg in TEXTNOW_PACKAGES) {
-                try {
-                    applicationContext.grantUriPermission(pkg, imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                } catch (e: Exception) { }
-            }
-
-            // Use share intent targeting TextNow — this opens TextNow's compose with the image pre-attached
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "image/*"
-                putExtra(Intent.EXTRA_STREAM, imageUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-
-            for (pkg in TEXTNOW_PACKAGES) {
-                try {
-                    shareIntent.setPackage(pkg)
-                    applicationContext.startActivity(shareIntent)
-                    return true
-                } catch (e: Exception) { }
-            }
-            false
-        } catch (e: Exception) {
-            Log.e(TAG, "Direct image share failed: ${e.message}")
-            false
-        }
+        // Try tapping Gallery/Photos in the picker that appears
+        return tapGalleryInPicker()
     }
 
     private fun tapGalleryInPicker(): Boolean {
         Thread.sleep(1500L)
         val root = rootInActiveWindow ?: return false
 
-        // Look for "Gallery", "Photos", "Image" options in the picker sheet
         val labels = listOf("gallery", "photos", "image", "photo library", "files")
         for (label in labels) {
             val nodes = root.findAccessibilityNodeInfosByText(label)
@@ -290,15 +262,14 @@ class TextNowAccessibilityService : AccessibilityService() {
             val nodes = root.findAccessibilityNodeInfosByText(label)
             val node = nodes.firstOrNull { it.isClickable }
             if (node != null) return node
-            // Also check content descriptions
         }
 
-        // Scan all nodes for content description containing attach-related words
         var found: AccessibilityNodeInfo? = null
         traverseNodes(root) { node ->
             if (found == null) {
                 val desc = node.contentDescription?.toString()?.lowercase() ?: ""
-                if ((desc.contains("attach") || desc.contains("media") || desc.contains("image") || desc.contains("photo")) && node.isClickable) {
+                if ((desc.contains("attach") || desc.contains("media") ||
+                            desc.contains("image") || desc.contains("photo")) && node.isClickable) {
                     found = node
                 }
             }
