@@ -80,16 +80,15 @@
                         android:layout_width="18dp"
                         android:layout_height="18dp"
                         android:src="@android:drawable/ic_menu_call"
-                        android:layout_marginEnd="6dp"
-                        android:visibility="gone" />
+                        android:layout_marginEnd="6dp" />
 
                     <TextView
                         android:id="@+id/tvNumberCount"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="No numbers loaded"
+                        android:text="0 numbers loaded"
                         android:textSize="13sp"
-                        android:textColor="#444444" />
+                        android:textColor="#000000" />
 
                 </LinearLayout>
 
