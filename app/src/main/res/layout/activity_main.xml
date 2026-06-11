@@ -17,16 +17,8 @@
             android:text="TextNow Blaster"
             android:textSize="24sp"
             android:textStyle="bold"
-            android:textColor="#1565C0"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/tvStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Accessibility service: checking..."
-            android:textSize="12sp"
-            android:textColor="#666666"
+            android:textColor="#000000"
+            android:gravity="center"
             android:layout_marginBottom="16dp" />
 
         <!-- Phone numbers section -->
@@ -349,13 +341,24 @@
 
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Accessibility service: checking..."
+            android:textSize="12sp"
+            android:textColor="#666666"
+            android:gravity="center"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="4dp" />
+
         <Button
             android:id="@+id/btnAccessibility"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="⚙  Open Accessibility Settings"
             android:backgroundTint="#546E7A"
-            android:layout_marginTop="8dp" />
+            android:layout_marginTop="4dp" />
 
     </LinearLayout>
 </ScrollView>
