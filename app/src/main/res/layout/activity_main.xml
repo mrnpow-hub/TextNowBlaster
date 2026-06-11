@@ -67,30 +67,48 @@
                     android:text="Load Numbers from File"
                     android:backgroundTint="#1565C0" />
 
-                <TextView
-                    android:id="@+id/tvNumberCount"
+                <!-- Count row with phone icon -->
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="No numbers loaded"
-                    android:textSize="13sp"
-                    android:textColor="#444444"
-                    android:layout_marginTop="8dp" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="8dp">
 
-                <ScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="100dp"
-                    android:layout_marginTop="8dp"
-                    android:background="#F0F4FF"
-                    android:padding="6dp">
+                    <ImageView
+                        android:id="@+id/ivPhoneIcon"
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:src="@android:drawable/ic_menu_call"
+                        android:layout_marginEnd="6dp"
+                        android:visibility="gone" />
 
                     <TextView
-                        android:id="@+id/tvNumbersList"
+                        android:id="@+id/tvNumberCount"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="—"
-                        android:textSize="12sp"
-                        android:fontFamily="monospace"
-                        android:textColor="#333333" />
+                        android:text="No numbers loaded"
+                        android:textSize="13sp"
+                        android:textColor="#444444" />
+
+                </LinearLayout>
+
+                <!-- Scrollable 3-column grid of numbers -->
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="160dp"
+                    android:layout_marginTop="8dp"
+                    android:background="#F0F4FF"
+                    android:padding="6dp"
+                    android:nestedScrollingEnabled="true">
+
+                    <GridLayout
+                        android:id="@+id/gridNumbers"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:columnCount="3"
+                        android:useDefaultMargins="false" />
+
                 </ScrollView>
 
             </LinearLayout>
