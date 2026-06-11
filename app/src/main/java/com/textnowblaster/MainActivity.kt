@@ -7,7 +7,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.widget.GridLayout
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -145,16 +147,66 @@ class MainActivity : AppCompatActivity() {
             }
 
             val skipped = lines.count { it.isNotBlank() } - phoneNumbers.size
-            binding.tvNumberCount.text = "✅  ${phoneNumbers.size} valid numbers loaded" +
+
+            // Update count label with phone icon
+            binding.ivPhoneIcon.visibility = android.view.View.VISIBLE
+            binding.tvNumberCount.text = "${phoneNumbers.size} numbers loaded" +
                     if (skipped > 0) "  ($skipped skipped)" else ""
-            binding.tvNumbersList.text = phoneNumbers.take(50).joinToString("\n") +
-                    if (phoneNumbers.size > 50) "\n... and ${phoneNumbers.size - 50} more" else ""
+
+            // Populate the 3-column grid
+            populateNumbersGrid()
 
             if (phoneNumbers.isEmpty()) {
+                binding.ivPhoneIcon.visibility = android.view.View.GONE
                 Toast.makeText(this, "No valid numbers found in file.", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Error reading file: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun populateNumbersGrid() {
+        binding.gridNumbers.removeAllViews()
+
+        val displayNumbers = if (phoneNumbers.size > 300) phoneNumbers.take(300) else phoneNumbers
+        val columnCount = 3
+
+        for ((index, number) in displayNumbers.withIndex()) {
+            val tv = TextView(this).apply {
+                text = number
+                textSize = 11f
+                setTextColor(0xFF333333.toInt())
+                typeface = android.graphics.Typeface.MONOSPACE
+                setPadding(4, 3, 4, 3)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+
+            val params = GridLayout.LayoutParams().apply {
+                columnSpec = GridLayout.spec(index % columnCount, 1f)
+                rowSpec = GridLayout.spec(index / columnCount)
+                width = 0
+                setMargins(2, 1, 2, 1)
+            }
+
+            binding.gridNumbers.addView(tv, params)
+        }
+
+        if (phoneNumbers.size > 300) {
+            // Add a full-width "and N more" row
+            val moreView = TextView(this).apply {
+                text = "… and ${phoneNumbers.size - 300} more"
+                textSize = 11f
+                setTextColor(0xFF888888.toInt())
+                setPadding(4, 4, 4, 4)
+            }
+            val params = GridLayout.LayoutParams().apply {
+                columnSpec = GridLayout.spec(0, columnCount, 1f)
+                rowSpec = GridLayout.spec(GridLayout.UNDEFINED)
+                width = GridLayout.LayoutParams.MATCH_PARENT
+                setMargins(2, 2, 2, 2)
+            }
+            binding.gridNumbers.addView(moreView, params)
         }
     }
 
