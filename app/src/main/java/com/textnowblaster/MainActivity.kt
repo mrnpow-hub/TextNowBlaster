@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.View
 import android.widget.GridLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -116,7 +117,7 @@ class MainActivity : AppCompatActivity() {
         selectedImageUri = null
         binding.tvImageStatus.text = "No image selected"
         binding.tvImageStatus.setTextColor(0xFF888888.toInt())
-        binding.ivPreview.visibility = android.view.View.GONE
+        binding.ivPreview.visibility = View.GONE
         binding.ivPreview.setImageDrawable(null)
     }
 
@@ -148,16 +149,14 @@ class MainActivity : AppCompatActivity() {
 
             val skipped = lines.count { it.isNotBlank() } - phoneNumbers.size
 
-            // Update count label with phone icon
-            binding.ivPhoneIcon.visibility = android.view.View.VISIBLE
+            binding.ivPhoneIcon.visibility = View.VISIBLE
             binding.tvNumberCount.text = "${phoneNumbers.size} numbers loaded" +
                     if (skipped > 0) "  ($skipped skipped)" else ""
 
-            // Populate the 3-column grid
             populateNumbersGrid()
 
             if (phoneNumbers.isEmpty()) {
-                binding.ivPhoneIcon.visibility = android.view.View.GONE
+                binding.ivPhoneIcon.visibility = View.GONE
                 Toast.makeText(this, "No valid numbers found in file.", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
@@ -193,7 +192,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (phoneNumbers.size > 300) {
-            // Add a full-width "and N more" row
             val moreView = TextView(this).apply {
                 text = "… and ${phoneNumbers.size - 300} more"
                 textSize = 11f
@@ -218,8 +216,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         selectedImageUri = uri
-
-        binding.ivPreview.visibility = android.view.View.VISIBLE
+        binding.ivPreview.visibility = View.VISIBLE
         binding.ivPreview.setImageURI(uri)
 
         val fileName = getFileName(uri) ?: uri.lastPathSegment ?: "image"
@@ -282,7 +279,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setRunningState(true)
-        binding.layoutProgress.visibility = android.view.View.VISIBLE
+        binding.layoutProgress.visibility = View.VISIBLE
         binding.tvProgress.text = "Starting..."
         binding.progressBar.progress = 0
 
@@ -324,7 +321,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnClearImage.isEnabled = !running
         binding.seekDelay.isEnabled = !running
         binding.etDelayInput.isEnabled = !running
-        if (running) binding.layoutProgress.visibility = android.view.View.VISIBLE
+        if (running) binding.layoutProgress.visibility = View.VISIBLE
     }
 
     private fun isAccessibilityEnabled(): Boolean {
