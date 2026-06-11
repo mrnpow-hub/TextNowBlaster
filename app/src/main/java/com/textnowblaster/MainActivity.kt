@@ -149,14 +149,13 @@ class MainActivity : AppCompatActivity() {
 
             val skipped = lines.count { it.isNotBlank() } - phoneNumbers.size
 
-            binding.ivPhoneIcon.visibility = View.VISIBLE
             binding.tvNumberCount.text = "${phoneNumbers.size} numbers loaded" +
                     if (skipped > 0) "  ($skipped skipped)" else ""
+            binding.tvNumberCount.setTextColor(0xFF000000.toInt())
 
             populateNumbersGrid()
 
             if (phoneNumbers.isEmpty()) {
-                binding.ivPhoneIcon.visibility = View.GONE
                 Toast.makeText(this, "No valid numbers found in file.", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
